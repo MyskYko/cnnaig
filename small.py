@@ -77,13 +77,14 @@ def getmodel(level = 0):
     model.add(Conv2D(20, (3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 3)))
     if level >= 3:
         model.add(Lambda(ClipByVal))
-    '''
     model.add(Conv2D(input_shape=x_train.shape[1:], filters=20, kernel_size=(3, 3), strides=(1,1), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 1)))
     if level >= 1:
         model.add(Lambda(ClipByVal))
     model.add(Conv2D(20, (3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 2)))
     if level >= 2:
         model.add(Lambda(ClipByVal))
+    '''
+    model.add(MaxPooling2D(input_shape=x_train.shape[1:], pool_size=(2, 2)))
     model.add(MaxPooling2D((2, 2)))
     model.add(MaxPooling2D((2, 2)))
     model.add(MaxPooling2D((2, 2)))
