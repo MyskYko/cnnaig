@@ -2,18 +2,32 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, AveragePooling2D, Dense, Flatten, Dropout, BatchNormalization
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, AveragePooling2D, Dense, Flatten, Dropout, BatchNormalization
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.layers import Lambda
 
 
+###### MODIFY FROM HERE #####
 
-defshamt = 3
 maxshamt = 10
 
+def getmodel():
+    # Define the model
+    inputs = Input((32, 32, 3))
+    x = inputs
+    x = Conv2D(3, (3, 3), strides=(3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = Conv2D(3, (3, 3), strides=(2, 2), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = MaxPooling2D((2,2))(x)
+    x = Flatten()(x)
+    x = Dense(10, activation='softmax')(x)
+    model = Model(inputs=inputs, outputs=x)
+    return model
 
+########## TO HERE ##########
+
+defshamt = 3
 
 # Set GPU memory allocation to dynamic
 try:
@@ -24,8 +38,6 @@ except:
     
 # Set seed to replicate results
 tf.random.set_seed(42)
-
-
 
 # Load the CIFAR-10 dataset
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
@@ -59,37 +71,7 @@ steps_per_epoch = int(trainX.shape[0] / batch_size)
 
 
 
-def ClipByVal(a):
-    return tf.where(a == 0, a, tf.divide(tf.clip_by_value(tf.floor(tf.multiply(a, 1 << defshamt)), -32, 31), 1 << defshamt))
-
-def getmodel(level = 0):
-    # Define the model
-    model = Sequential()
-    '''
-    model.add(Conv2D(input_shape=x_train.shape[1:], filters=20, kernel_size=(3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 1)))
-    if level >= 1:
-        model.add(Lambda(ClipByVal))
-    model.add(MaxPooling2D((2, 2)))
-    model.add(Conv2D(20, (3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 2)))
-    if level >= 2:
-        model.add(Lambda(ClipByVal))
-    model.add(MaxPooling2D((2, 2)))
-    model.add(Conv2D(20, (3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 3)))
-    if level >= 3:
-        model.add(Lambda(ClipByVal))
-    model.add(Conv2D(input_shape=x_train.shape[1:], filters=20, kernel_size=(3, 3), strides=(1,1), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 1)))
-    if level >= 1:
-        model.add(Lambda(ClipByVal))
-    model.add(Conv2D(20, (3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001), trainable=(level < 2)))
-    if level >= 2:
-        model.add(Lambda(ClipByVal))
-    '''
-    model.add(MaxPooling2D(input_shape=x_train.shape[1:], pool_size=(2, 2)))
-    model.add(MaxPooling2D((2, 2)))
-    model.add(MaxPooling2D((2, 2)))
-    model.add(MaxPooling2D((2, 2)))
-    model.add(Flatten())
-    model.add(Dense(10, activation='softmax', trainable=(level < 3)))
+def trainmodel(model, filepath):
     print(model.summary())
 
     # Use an exponentially decaying learning rate for training
@@ -99,10 +81,7 @@ def getmodel(level = 0):
         decay_rate=0.9,
         staircase=False)
     model.compile(loss='categorical_crossentropy', optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule), metrics=['acc'])
-    
-    return model
 
-def trainmodel(model, filepath):
     # Save the best validation set model
     model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
         filepath=filepath,
@@ -137,6 +116,12 @@ def trainmodel(model, filepath):
     #plt.plot(history.history['val_loss'], color='orange', label='test')
     #plt.legend()
 
+def evalmodel(model):
+    model.compile(loss='categorical_crossentropy', metrics=['acc'])
+    [loss, acc] = model.evaluate(x_test, y_test)
+    print('Loss:', loss)
+    print('Accuracy:', acc * 100)
+
 def quantizeconv(weights):
     w0 = weights[0]
     w0 = np.log2(abs(w0))
@@ -161,6 +146,22 @@ def quantizeconv(weights):
     '''
     return [w0, w1]
 
+def ClipByVal(a):
+    return tf.where(a == 0, a, tf.divide(tf.clip_by_value(tf.floor(tf.multiply(a, 1 << defshamt)), -32, 31), 1 << defshamt))
+def ClipLayer():
+    return Lambda(ClipByVal)
+
+def insertlayer(model, layer_id, new_layer):
+    layers = [l for l in model.layers]
+    x = layers[0].output
+    for i in range(1, len(layers)):
+        if i == layer_id:
+            x = new_layer(x)
+        x = layers[i](x)
+    model = Model(inputs=layers[0].input, outputs=x)
+    model.save("_tmp_model")
+    model = tf.keras.models.load_model("_tmp_model")    
+    return model
 
 
 parser = argparse.ArgumentParser()
@@ -176,44 +177,41 @@ if args.train:
 
 quantized_filepath = 'small_quantized.h5'
 if args.quant:
-    level = 1
+    model = getmodel()
     layerid = 0
-    model = getmodel(level)
-    model.load_weights(checkpoint_filepath)
-    
     while layerid < len(model.layers):
         layername = model.layers[layerid].__class__.__name__
         if layername == 'Conv2D' or layername == 'Dense':
+            if layerid < len(model.layers) - 1: # not last layer
+                model = insertlayer(model, layerid+1, ClipLayer())
+            model.load_weights(checkpoint_filepath)
             weights = model.layers[layerid].get_weights()
             weights = quantizeconv(weights)
             model.layers[layerid].set_weights(weights)
-            
-            [loss, acc] = model.evaluate(x_test, y_test)
-            print('Loss:', loss)
-            print('Accuracy:', acc * 100)
-            
-            checkpoint_filepath = f'small_quant{level}.h5'
+            for i in range(layerid+1):
+                model.layers[i].trainable = False
+            evalmodel(model)
+            if layerid == len(model.layers) - 1:
+                print(model.summary())
+                break
+            checkpoint_filepath = f'small_quant{layerid}.h5'
             trainmodel(model, checkpoint_filepath)
-            level += 1
-            model = getmodel(level)
-            model.load_weights(checkpoint_filepath)
         layerid += 1
-    
     model.save_weights(quantized_filepath)
+    print(model.get_weights())
 
 
-    
+
 def fptest(model):
     np.random.seed(41)
     testin = np.random.randint(8, size=(32, 32, 3))
     
-    from tensorflow.keras.models import Model
     image = testin / 8
     image = np.expand_dims(image, axis=0)
     inp = model.input
     partial_model = Model(model.inputs, model.layers[1].output)
     outputs = [layer.output for layer in model.layers]
-    functors = [Model([inp], [out]) for out in outputs]
+    functors = [Model(inputs=inp, outputs=out) for out in outputs]
     eximages = [func([image], training=False)[0] for func in functors]
     
     from fpsimulate import fpsimulate
@@ -222,8 +220,6 @@ def fptest(model):
     
     for i, image in enumerate(images):
         print(f'layer {i}')
-        print(eximages[i])
-        print(image)
         print(f'diff num: {np.count_nonzero(image != eximages[i])} / {image.size}')
         a = np.where(eximages[i] != 0, image / eximages[i], 1)
         print(f'ratio: {a.min()} ~ {a.max()}')
@@ -231,7 +227,7 @@ def fptest(model):
 
 def fpinttest(model):
     np.random.seed(41)
-    testin = np.random.randint(8, size=(8, 8, 3))
+    testin = np.random.randint(8, size=(32, 32, 3))
     
     from fpsimulate import fpsimulate
     image = testin / 8
@@ -249,7 +245,7 @@ def fpinttest(model):
 
 
 def intverilogtest(model):
-    np.random.seed(40)
+    np.random.seed(41)
     testin = np.random.randint(8, size=(32, 32, 3))
     
     from intsimulate import intsimulate
@@ -325,9 +321,16 @@ def intverilogtest(model):
     
     
 if args.verilog:    
-    model = getmodel(100)
+    model = getmodel()
+    for layerid in range(len(model.layers)-1):
+        layername = model.layers[layerid].__class__.__name__
+        if layername == 'Conv2D' or layername == 'Dense':
+            model = insertlayer(model, layerid+1, ClipLayer())
     model.load_weights(quantized_filepath)
+
+    print(model.summary())
     #fptest(model)
+    #fpinttest(model)
     intverilogtest(model)
 
 

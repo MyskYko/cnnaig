@@ -2,10 +2,9 @@ import math
 import numpy as np
 
 '''
-assume same padding, relu, no stride
+assume same padding, relu
 '''
 def fpsimulateconv(image, weights, strides):
-    print(strides)
     nx = np.shape(image)[0]
     ny = np.shape(image)[1]
     nift = np.shape(image)[2]
@@ -16,16 +15,20 @@ def fpsimulateconv(image, weights, strides):
     noft = np.shape(w0)[3]
     nsx = strides[0]
     nsy = strides[1]
-    imageout = np.zeros(((nx - nsx) // nsx + 1, (ny - nsy) // nsy + 1, noft), dtype='float32')
+    nox = (nx + nsx - 1) // nsx
+    noy = (ny + nsy - 1) // nsy
+    npx = ((nox - 1) * nsx + nkx - nx) // 2
+    npy = ((noy - 1) * nsy + nky - ny) // 2
+    imageout = np.zeros((nox, noy, noft), dtype='float32')
     for x in range(0, nx, nsx):
         for y in range(0, ny, nsy):
             for oft in range(noft):
                 for dx in range(nkx):
-                    xx = x + dx - (nkx-1)//2
+                    xx = x + dx - npx
                     if xx < 0 or xx >= nx:
                         continue
                     for dy in range(nky):
-                        yy = y + dy - (nky-1)//2
+                        yy = y + dy - npy
                         if yy < 0 or yy >= ny:
                             continue
                         for ift in range(nift):

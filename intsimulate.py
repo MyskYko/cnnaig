@@ -2,9 +2,9 @@ import math
 import numpy as np
 
 '''
-assume same padding, relu, no stride
+assume same padding, relu
 '''
-def intsimulateconv(image, weights):
+def intsimulateconv(image, weights, strides):
     cshamt = image[1]
     image = image[0]
     nx = np.shape(image)[0]
@@ -18,25 +18,31 @@ def intsimulateconv(image, weights):
     nkx = np.shape(w0)[0]
     nky = np.shape(w0)[1]
     noft = np.shape(w0)[3]
-    imageout = np.zeros((nx, ny, noft), dtype='int64')
-    for x in range(nx):
-        for y in range(ny):
+    nsx = strides[0]
+    nsy = strides[1]
+    nox = (nx + nsx - 1) // nsx
+    noy = (ny + nsy - 1) // nsy
+    npx = ((nox - 1) * nsx + nkx - nx) // 2
+    npy = ((noy - 1) * nsy + nky - ny) // 2
+    imageout = np.zeros((nox, noy, noft), dtype='int64')
+    for x in range(0, nx, nsx):
+        for y in range(0, ny, nsy):
             for oft in range(noft):
                 for dx in range(nkx):
-                    xx = x + dx - (nkx-1)//2
+                    xx = x + dx - npx
                     if xx < 0 or xx >= nx:
                         continue
                     for dy in range(nky):
-                        yy = y + dy - (nky-1)//2
+                        yy = y + dy - npy
                         if yy < 0 or yy >= ny:
                             continue
                         for ift in range(nift):
                             val = image[xx][yy][ift] << (shamt + w0[dx][dy][ift][oft])
                             if w0sign[dx][dy][ift][oft]:
-                                imageout[x][y][oft] += val
+                                imageout[x//nsx][y//nsy][oft] += val
                             else:
-                                imageout[x][y][oft] -= val
-                imageout[x][y][oft] += w1[oft]
+                                imageout[x//nsx][y//nsy][oft] -= val
+                imageout[x//nsx][y//nsy][oft] += w1[oft]
     return (np.maximum(imageout, 0), cshamt + shamt)
 
 '''
@@ -138,7 +144,7 @@ def intsimulate(layers, image):
         layername = layer.__class__.__name__
         print(layername)
         if layername == 'Conv2D':
-            image = intsimulateconv(image, layer.get_weights())
+            image = intsimulateconv(image, layer.get_weights(), layer.strides)
         elif layername == 'BatchNormalization':
             image = intsimulatenorm(image, layer.get_weights())
         elif layername == 'Lambda':

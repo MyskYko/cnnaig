@@ -2,9 +2,9 @@ import math
 import numpy as np
 
 '''
-assume same padding, relu, no stride
+assume same padding, relu
 '''
-def genverilogconv(image, weights, name):
+def genverilogconv(image, weights, strides, name):
     cbitwidth = image[2]
     cshamt = image[1]
     nx = image[0][0]
@@ -18,8 +18,14 @@ def genverilogconv(image, weights, name):
     nkx = np.shape(w0)[0]
     nky = np.shape(w0)[1]
     noft = np.shape(w0)[3]
+    nsx = strides[0]
+    nsy = strides[1]
+    nox = (nx + nsx - 1) // nsx
+    noy = (ny + nsy - 1) // nsy
+    npx = ((nox - 1) * nsx + nkx - nx) // 2
+    npy = ((noy - 1) * nsy + nky - ny) // 2
     ninputs = nx * ny * nift
-    noutputs = nx * ny * noft
+    noutputs = nox * noy * noft
     n = nift * nkx * nky
     m = cbitwidth + shamt
     bitwidth = m + (n+1-1).bit_length()
@@ -36,16 +42,16 @@ def genverilogconv(image, weights, name):
     f.write(f'generate for(i = 0; i < {noutputs}; i = i + 1) begin : parseout\n')
     f.write(f'assign out[{bitwidth}*(i+1)-1:{bitwidth}*i] = po[i] > 0? po[i]: 0;\n')
     f.write('end endgenerate\n')
-    for x in range(nx):
-        for y in range(ny):
+    for x in range(0, nx, nsx):
+        for y in range(0, ny, nsy):
             for oft in range(noft):
-                f.write(f'assign po[{oft+y*noft+x*noft*ny}] =')
+                f.write(f'assign po[{oft+(y//nsy)*noft+(x//nsx)*noft*noy}] =')
                 for dx in range(nkx):
-                    xx = x + dx - (nkx-1)//2
+                    xx = x + dx - npx
                     if xx < 0 or xx >= nx:
                         continue
                     for dy in range(nky):
-                        yy = y + dy - (nky-1)//2
+                        yy = y + dy - npy
                         if yy < 0 or yy >= ny:
                             continue
                         for ift in range(nift):
@@ -65,7 +71,7 @@ def genverilogconv(image, weights, name):
                 else:
                     f.write(';\n')
     f.write('endmodule\n')
-    return ((nx, ny, noft), cshamt + shamt, bitwidth)
+    return ((nox, noy, noft), cshamt + shamt, bitwidth)
 
 '''
 no fdiv
@@ -270,7 +276,7 @@ def genverilog(layers, image, name):
         modulename = f'{name}_{layername}_{i}'
         print(layername)
         if layername == 'Conv2D':
-            image = genverilogconv(image, layer.get_weights(), modulename)
+            image = genverilogconv(image, layer.get_weights(), layer.strides, modulename)
             submodules.append((i, modulename))
         elif layername == 'BatchNormalization':
             image = genverilognorm(image, layer.get_weights(), modulename)
