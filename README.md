@@ -9,5 +9,6 @@ python3 small.py --train --quant --verilog
  - --verilog generates verilog and blif files to test_(DATE) directory (call yosys and abc for synthesis)
 ## TODO
  - Change model and maxshamt in small.py to get a relatively accurate AIG of at most 1,000,000 nodes
-    - You can use only Conv2, MaxPooling, and Flatten&Dense
+    - You can use only Conv2(same padding, ReLU), MaxPooling(valid padding, stride amount same as kernel size), and Flatten&Dense
+    - Change ntrainepoch to train longer time
  - Implement pruning
