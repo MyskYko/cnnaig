@@ -323,8 +323,8 @@ def intverilogtest(model):
 if args.verilog:    
     model = getmodel(100)
     model.load_weights(quantized_filepath)
-    fptest(model)
-    #intverilogtest(model)
+    #fptest(model)
+    intverilogtest(model)
 
 
 
