@@ -25,6 +25,8 @@ def getmodel():
     model = Model(inputs=inputs, outputs=x)
     return model
 
+ntrainepoch = 1
+
 ########## TO HERE ##########
 
 defshamt = 3
@@ -92,8 +94,7 @@ def trainmodel(model, filepath):
     save_best_only=True)
     
     # Train the network
-    #history = model.fit(it_train, validation_data=(valX, valY), epochs=400, callbacks=[model_checkpoint_callback])
-    history = model.fit(it_train, validation_data=(valX, valY), epochs=1, callbacks=[model_checkpoint_callback])
+    history = model.fit(it_train, validation_data=(valX, valY), epochs=ntrainepoch, callbacks=[model_checkpoint_callback])
 
     # Compute accuracy on the test set
     model.load_weights(filepath)
