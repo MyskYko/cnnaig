@@ -10,9 +10,10 @@ def intsimulateconv(image, weights, strides):
     nx = np.shape(image)[0]
     ny = np.shape(image)[1]
     nift = np.shape(image)[2]
-    w0 = np.log2(abs(weights[0])).astype('int64')
+    w0 = np.where(weights[0] != 0, np.log2(abs(weights[0])), 1000).astype('int64')
     shamt = -np.min(w0)
     w0sign = weights[0] > 0
+    w0prune = weights[0] == 0
     w1 = weights[1] * (1 << (shamt + cshamt))
     w1 = w1.astype('int64')
     nkx = np.shape(w0)[0]
@@ -37,6 +38,8 @@ def intsimulateconv(image, weights, strides):
                         if yy < 0 or yy >= ny:
                             continue
                         for ift in range(nift):
+                            if w0prune[dx][dy][ift][oft]:
+                                continue
                             val = image[xx][yy][ift] << (shamt + w0[dx][dy][ift][oft])
                             if w0sign[dx][dy][ift][oft]:
                                 imageout[x//nsx][y//nsy][oft] += val
@@ -121,15 +124,18 @@ def intsimulatedense(image, weights):
     cshamt = image[1]
     image = image[0]
     n = np.shape(image)[0]
-    w0 = np.log2(abs(weights[0])).astype('int64')
+    w0 = np.where(weights[0] != 0, np.log2(abs(weights[0])), 1000).astype('int64')
     shamt = -np.min(w0)
     w0sign = weights[0] > 0
+    w0prune = weights[0] == 0
     w1 = weights[1] * (1 << (shamt + cshamt))
     w1 = w1.astype('int64')
     m = np.shape(w0)[1]
     imageout = np.zeros(m, dtype='int64')
     for j in range(m):
         for i in range(n):
+            if w0prune[i][j]:
+                continue
             val = image[i] << (shamt + w0[i][j])
             if w0sign[i][j]:
                 imageout[j] += val

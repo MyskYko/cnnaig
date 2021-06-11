@@ -11,7 +11,8 @@ from tensorflow.keras.layers import Lambda
 
 ###### MODIFY FROM HERE #####
 
-maxshamt = 10
+maxshamt = 10 # range of weights is 2^a ~ 2^(a-maxshamt) where 2^a is max weight value
+prunethold = 10 # prune weights less than 2^(a-prunethod)
 
 def getmodel():
     # Define the model
@@ -28,6 +29,9 @@ def getmodel():
 ntrainepoch = 1
 
 ########## TO HERE ##########
+
+if prunethold < maxshamt: # maxshamt shold be not more than prunethold (avoid unnecessary bits)
+    maxshamt = prunethold
 
 defshamt = 3
 
@@ -127,8 +131,10 @@ def quantizeconv(weights):
     w0 = weights[0]
     w0 = np.log2(abs(w0))
     w0 = np.floor(w0).astype('int32')
+    w0prune = w0 < np.max(w0) - prunethold
     w0 = np.maximum(w0, np.max(w0) - maxshamt)
     w0 = 2.0 ** w0
+    w0 = np.where(w0prune, 0, w0)
     w0 = np.where(weights[0] > 0, w0, -w0)
     '''
     print(w0[0])

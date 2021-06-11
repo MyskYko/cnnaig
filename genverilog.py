@@ -10,9 +10,10 @@ def genverilogconv(image, weights, strides, name):
     nx = image[0][0]
     ny = image[0][1]
     nift = image[0][2]
-    w0 = np.log2(abs(weights[0])).astype('int64')
+    w0 = np.where(weights[0] != 0, np.log2(abs(weights[0])), 1000).astype('int64')
     shamt = -np.min(w0)
     w0sign = weights[0] > 0
+    w0prune = weights[0] == 0
     w1 = weights[1] * (1 << (shamt + cshamt))
     w1 = w1.astype('int64')
     nkx = np.shape(w0)[0]
@@ -55,6 +56,8 @@ def genverilogconv(image, weights, strides, name):
                         if yy < 0 or yy >= ny:
                             continue
                         for ift in range(nift):
+                            if w0prune[dx][dy][ift][oft]:
+                                continue
                             d = shamt + w0[dx][dy][ift][oft]
                             sval = f'p[{ift+yy*nift+xx*nift*ny}]'
                             if d != 0:
@@ -224,9 +227,10 @@ def genverilogdense(image, weights, name):
     cbitwidth = image[2]
     cshamt = image[1]
     n = image[0][0]
-    w0 = np.log2(abs(weights[0])).astype('int64')
+    w0 = np.where(weights[0] != 0, np.log2(abs(weights[0])), 1000).astype('int64')
     shamt = -np.min(w0)
     w0sign = weights[0] > 0
+    w0prune = weights[0] == 0
     w1 = weights[1] * (1 << (shamt + cshamt))
     w1 = w1.astype('int64')
     m = np.shape(w0)[1]
@@ -249,6 +253,8 @@ def genverilogdense(image, weights, name):
     for j in range(m):
         f.write(f'assign po[{j}] =');
         for i in range(n):
+            if w0prune[i][j]:
+                continue
             d = shamt + w0[i][j]
             sval = f'p[{i}]'
             if d != 0:
