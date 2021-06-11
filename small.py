@@ -1,3 +1,4 @@
+import os
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,6 +8,18 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, AveragePooling2D, Dense, Flatten, Dropout, BatchNormalization
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.layers import Lambda
+
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--train', action='store_true', help="do training")
+parser.add_argument('--quant', action='store_true', help="do quantization")
+parser.add_argument('--verilog', action='store_true', help="gen verilog")
+parser.add_argument('--yosys', help="yosys executable", default='~/yosys/yosys')
+parser.add_argument('--abc', help="abc executable", default='~/abc/abc')
+parser.add_argument('--cadex', help="cadex executable", default=os.path.dirname(os.path.abspath(__file__)) + '/cadex')
+args = parser.parse_args()
+
 
 
 ###### MODIFY FROM HERE #####
@@ -29,6 +42,8 @@ def getmodel():
 ntrainepoch = 1
 
 ########## TO HERE ##########
+
+
 
 if prunethold < maxshamt: # maxshamt shold be not more than prunethold (avoid unnecessary bits)
     maxshamt = prunethold
@@ -170,45 +185,6 @@ def insertlayer(model, layer_id, new_layer):
     model = tf.keras.models.load_model("_tmp_model")    
     return model
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--train', action='store_true', help="do training")
-parser.add_argument('--quant', action='store_true', help="do quantization")
-parser.add_argument('--verilog', action='store_true', help="gen verilog")
-args = parser.parse_args()
-
-checkpoint_filepath = 'small_float.h5'
-if args.train:
-    model = getmodel()
-    trainmodel(model, checkpoint_filepath)
-
-quantized_filepath = 'small_quantized.h5'
-if args.quant:
-    model = getmodel()
-    layerid = 0
-    while layerid < len(model.layers):
-        layername = model.layers[layerid].__class__.__name__
-        if layername == 'Conv2D' or layername == 'Dense':
-            if layerid < len(model.layers) - 1: # not last layer
-                model = insertlayer(model, layerid+1, ClipLayer())
-            model.load_weights(checkpoint_filepath)
-            weights = model.layers[layerid].get_weights()
-            weights = quantizeconv(weights)
-            model.layers[layerid].set_weights(weights)
-            for i in range(layerid+1):
-                model.layers[i].trainable = False
-            evalmodel(model)
-            if layerid == len(model.layers) - 1:
-                print(model.summary())
-                break
-            checkpoint_filepath = f'small_quant{layerid}.h5'
-            trainmodel(model, checkpoint_filepath)
-        layerid += 1
-    model.save_weights(quantized_filepath)
-    print(model.get_weights())
-
-
-
 def fptest(model):
     np.random.seed(41)
     testin = np.random.randint(8, size=(32, 32, 3))
@@ -260,7 +236,6 @@ def intverilogtest(model):
     intimages = intsimulate(model.layers, image)
         
     from genverilog import genverilog
-    import os
     import datetime
     dirname = 'test_' + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     os.mkdir(dirname)
@@ -307,15 +282,15 @@ def intverilogtest(model):
     outfile.write('\n')
     outfile.close()
 
-    cmd = '~/yosys/yosys -p \"read_verilog test*.v; synth -auto-top; write_verilog a.v; flatten; aigmap; write_blif a.blif\"'
+    cmd = args.yosys + ' -p \"read_verilog test*.v; synth -auto-top; write_verilog a.v; flatten; aigmap; write_blif a.blif\"'
     if os.system(cmd):
         print('yosys failed')
         exit(1)
-    cmd = '~/abc/abc -c \"read a.blif; strash; print_stats; dc2; print_stats; dc2; print_stats; dc2; print_stats; dc2; print_stats; dc2; print_stats; write_blif b.blif\"'
+    cmd = args.abc + ' -c \"read a.blif; strash; print_stats; dc2; print_stats; dc2; print_stats; dc2; print_stats; dc2; print_stats; dc2; print_stats; write_blif b.blif\"'
     if os.system(cmd):
         print('abc failed')
         exit(1)
-    cmd = '../cadex patsim b.blif inp.txt out2.txt'
+    cmd = args.cadex + ' patsim b.blif inp.txt out2.txt'
     if os.system(cmd):
         print('cadex failed')
         exit(1)
@@ -325,7 +300,38 @@ def intverilogtest(model):
         exit(1)
 
     os.chdir('..')
-    
+
+
+
+checkpoint_filepath = 'small_float.h5'
+if args.train:
+    model = getmodel()
+    trainmodel(model, checkpoint_filepath)
+
+quantized_filepath = 'small_quantized.h5'
+if args.quant:
+    model = getmodel()
+    layerid = 0
+    while layerid < len(model.layers):
+        layername = model.layers[layerid].__class__.__name__
+        if layername == 'Conv2D' or layername == 'Dense':
+            if layerid < len(model.layers) - 1: # not last layer
+                model = insertlayer(model, layerid+1, ClipLayer())
+            model.load_weights(checkpoint_filepath)
+            weights = model.layers[layerid].get_weights()
+            weights = quantizeconv(weights)
+            model.layers[layerid].set_weights(weights)
+            for i in range(layerid+1):
+                model.layers[i].trainable = False
+            evalmodel(model)
+            if layerid == len(model.layers) - 1:
+                print(model.summary())
+                break
+            checkpoint_filepath = f'small_quant{layerid}.h5'
+            trainmodel(model, checkpoint_filepath)
+        layerid += 1
+    model.save_weights(quantized_filepath)
+    print(model.get_weights())
     
 if args.verilog:    
     model = getmodel()
