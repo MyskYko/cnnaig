@@ -132,7 +132,7 @@ def genverilognorm(image, weights, name):
 '''
 specific clipping for this model
 '''
-def genverilogclip(image, name):
+def genverilogclip(image, cliprange, name):
     cbitwidth = image[2]
     cshamt = image[1]
     nx = image[0][0]
@@ -140,7 +140,9 @@ def genverilogclip(image, name):
     nft = image[0][2]
     ninputs = nx * ny * nft
     noutputs = nx * ny * nft
-    bitwidth = 6
+    bitwidth = cliprange[0] + cliprange[1]
+    a = cliprange[0]
+    b = 1 << (bitwidth - 1)
     f = open(f'{name}.v', mode='w')
     f.write(f'module {name} (\n')
     f.write(f'input [{ninputs*cbitwidth}-1:0] in,\n')
@@ -156,12 +158,12 @@ def genverilogclip(image, name):
     f.write('end endgenerate\n')
     f.write(f'generate for(i = 0; i < {nx*ny*nft}; i = i + 1) begin : clip\n')
     f.write(f'assign po[i] =\n')
-    f.write(f'(p[i] > $signed({cbitwidth}\'d{31 << (cshamt - 3)}))? {bitwidth}\'d31:\n')
-    f.write(f'(p[i] < -$signed({cbitwidth}\'d{32 << (cshamt - 3)}))? -{bitwidth}\'d32:\n')
-    f.write(f'p[i] >> {cshamt - 3};\n')
+    f.write(f'(p[i] > $signed({cbitwidth}\'d{(b-1) << (cshamt - a)}))? {bitwidth}\'d{b-1}:\n')
+    f.write(f'(p[i] < -$signed({cbitwidth}\'d{b << (cshamt - a)}))? -{bitwidth}\'d{b}:\n')
+    f.write(f'p[i] >> {cshamt - a};\n')
     f.write('end endgenerate\n')
     f.write('endmodule\n')
-    return ((nx, ny, nft), 3, bitwidth)
+    return ((nx, ny, nft), a, bitwidth)
 
 '''
 assume valid padding, as much stride
@@ -315,7 +317,7 @@ def genverilogdense(image, weights, name):
     f.write('endmodule\n')
     return ((m, 1, 1), cshamt + shamt, bitwidth)
 
-def genverilog(layers, image, name):
+def genverilog(layers, image, cliprange, name):
     ninputs = image[0][0] * image[0][1] * image[0][2] * image[2]
     submodules = []
     images = []
@@ -330,7 +332,7 @@ def genverilog(layers, image, name):
             image = genverilognorm(image, layer.get_weights(), modulename)
             submodules.append((i, modulename))
         elif layername == 'Lambda':
-            image = genverilogclip(image, modulename)
+            image = genverilogclip(image, cliprange, modulename)
             submodules.append((i, modulename))
         elif layername == 'MaxPooling2D':
             image = genverilogmaxp(image, layer.pool_size, modulename)

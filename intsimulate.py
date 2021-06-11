@@ -75,10 +75,12 @@ def intsimulatenorm(image, weights):
 '''
 specific clipping for this model
 '''
-def intsimulateclip(image):
+def intsimulateclip(image, cliprange):
     cshamt = image[1]
     image = image[0]
-    return (np.where(image > (31 << (cshamt - 3)), 31, np.where(image < -(32 << (cshamt - 3)), -32, image >> (cshamt - 3))), 3)
+    a = cliprange[0]
+    b = 1 << (cliprange[0] + cliprange[1] - 1)
+    return (np.where(image > ((b-1) << (cshamt -a)), b-1, np.where(image < -(b << (cshamt - a)), -b, image >> (cshamt - a))), a)
 
 '''
 assume valid padding, as much stride
@@ -145,7 +147,7 @@ def intsimulatedense(image, weights):
         imageout[j] += w1[j]
     return (imageout, cshamt + shamt)
 
-def intsimulate(layers, image):
+def intsimulate(layers, image, cliprange):
     images = []
     for i, layer in enumerate(layers):
         layername = layer.__class__.__name__
@@ -155,7 +157,7 @@ def intsimulate(layers, image):
         elif layername == 'BatchNormalization':
             image = intsimulatenorm(image, layer.get_weights())
         elif layername == 'Lambda':
-            image = intsimulateclip(image)
+            image = intsimulateclip(image, cliprange)
         elif layername == 'MaxPooling2D':
             image = intsimulatemaxp(image, layer.pool_size)
         elif layername == 'AveragePooling2D':

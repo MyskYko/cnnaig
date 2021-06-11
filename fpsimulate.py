@@ -57,8 +57,10 @@ def fpsimulatenorm(image, weights, fdiv = False):
 '''
 specific clipping for this model
 '''
-def fpsimulateclip(image):
-    return np.where(image == 0, image, np.clip(np.floor(image * 8), -32, 31) / 8)
+def fpsimulateclip(image, cliprange):
+    a = 1 << cliprange[0]
+    b = 1 << (cliprange[0] + cliprange[1] - 1)
+    return np.clip(np.floor(image * a), -b, b-1) / a
 
 '''
 assume valid padding, as much stride
@@ -110,7 +112,7 @@ def fpsimulatedense(image, weights, fsoftmax):
         imageout = np.exp(imageout)/np.sum(np.exp(imageout))
     return imageout
 
-def fpsimulate(layers, image, fdiv = True, fsoftmax = True):
+def fpsimulate(layers, image, cliprange, fdiv = True, fsoftmax = True):
     images = []
     for i, layer in enumerate(layers):
         layername = layer.__class__.__name__
@@ -120,7 +122,7 @@ def fpsimulate(layers, image, fdiv = True, fsoftmax = True):
         elif layername == 'BatchNormalization':
             image = fpsimulatenorm(image, layer.get_weights(), fdiv)
         elif layername == 'Lambda':
-            image = fpsimulateclip(image)
+            image = fpsimulateclip(image, cliprange)
         elif layername == 'MaxPooling2D':
             image = fpsimulatemaxp(image, layer.pool_size)
         elif layername == 'AveragePooling2D':

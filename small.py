@@ -1,5 +1,7 @@
 import os
 import argparse
+import functools
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
@@ -14,26 +16,33 @@ from tensorflow.keras.layers import Lambda
 parser = argparse.ArgumentParser()
 parser.add_argument('--train', action='store_true', help="do training")
 parser.add_argument('--quant', action='store_true', help="do quantization")
-parser.add_argument('--verilog', action='store_true', help="gen verilog")
-parser.add_argument('--yosys', help="yosys executable", default='~/yosys/yosys')
+parser.add_argument('--verilog', action='store_true', help="generate verilog and synthesize aig")
+parser.add_argument('--posterize', type=int, help="input bitwidth per color", default=3)
+parser.add_argument('--cliplow', type=int, help="bits below binary point after clipping", default=3)
+parser.add_argument('--cliphigh', type=int, help="bits above binary point after clipping", default=3)
+parser.add_argument('--maxshamt', type=int, help="range of quantized weights is set to 2^a ~ 2^(a-maxshamt)", default=10)
+parser.add_argument('--pthold', type=int, help="prune edge with weight less than 2^(a-pthold)", default=10)
+parser.add_argument('--yosys', help="yosys executable (and some options)", default='~/yosys/yosys -q -q')
 parser.add_argument('--abc', help="abc executable", default='~/abc/abc')
 parser.add_argument('--cadex', help="cadex executable", default=os.path.dirname(os.path.abspath(__file__)) + '/cadex')
+parser.add_argument('--fptest', action='store_true', help="compare keras and our fp simulation")
+parser.add_argument('--inttest', action='store_true', help="compare our fp and int simulation")
 args = parser.parse_args()
+
+# maxshamt shold be less than or equal to args.pthold (avoid unnecessary bits)
+maxshamt = max(args.maxshamt, args.pthold)
 
 
 
 ###### MODIFY FROM HERE #####
 
-maxshamt = 10 # range of weights is 2^a ~ 2^(a-maxshamt) where 2^a is max weight value
-prunethold = 10 # prune weights less than 2^(a-prunethod)
-
 def getmodel():
     # Define the model
-    inputs = Input((32, 32, 3))
+    inputs = Input((32, 32, args.posterize))
     x = inputs
     x = Conv2D(3, (3, 3), strides=(3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
     x = Conv2D(3, (3, 3), strides=(2, 2), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
-    x = MaxPooling2D((2,2))(x)
+    x = AveragePooling2D((2,2))(x)
     x = Flatten()(x)
     x = Dense(10, activation='softmax')(x)
     model = Model(inputs=inputs, outputs=x)
@@ -45,11 +54,6 @@ ntrainepoch = 1
 
 
 
-if prunethold < maxshamt: # maxshamt shold be not more than prunethold (avoid unnecessary bits)
-    maxshamt = prunethold
-
-defshamt = 3
-
 # Set GPU memory allocation to dynamic
 try:
     physical_devices = tf.config.list_physical_devices('GPU') 
@@ -59,13 +63,14 @@ except:
     
 # Set seed to replicate results
 tf.random.set_seed(42)
+np.random.seed(41)
 
 # Load the CIFAR-10 dataset
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
 
 # Convert 8-bit images to 3-bit and bring them to [0, 1] range
-x_train = np.floor(x_train / 32) / 8
-x_test = np.floor(x_test / 32) / 8
+x_train = np.floor(x_train / (1 << (8 - args.posterize))) / (1 << args.posterize)
+x_test = np.floor(x_test / (1 << (8 - args.posterize))) / (1 << args.posterize)
 
 # Convert labels to one-hot vectors
 y_train = to_categorical(y_train)
@@ -142,36 +147,28 @@ def evalmodel(model):
     print('Loss:', loss)
     print('Accuracy:', acc * 100)
 
-def quantizeconv(weights):
+def quantize(weights, cshamt):
     w0 = weights[0]
     w0 = np.log2(abs(w0))
     w0 = np.floor(w0).astype('int32')
-    w0prune = w0 < np.max(w0) - prunethold
+    w0prune = w0 < np.max(w0) - args.pthold
     w0 = np.maximum(w0, np.max(w0) - maxshamt)
     w0 = 2.0 ** w0
     w0 = np.where(w0prune, 0, w0)
     w0 = np.where(weights[0] > 0, w0, -w0)
-    '''
-    print(w0[0])
-    print(np.max(w0))
-    print(np.min(w0))
-    '''
     w1 = weights[1]
     w1 = np.clip(w1, -0.5, 0.5)
-    w1 = w1 * (1 << (defshamt + maxshamt))
+    w1 = w1 * (1 << (cshamt + maxshamt))
     w1 = np.floor(w1)
-    w1 = w1 / (1 << (defshamt + maxshamt))
-    '''
-    print(w1)
-    print(np.max(w1))
-    print(np.min(w1))
-    '''
+    w1 = w1 / (1 << (cshamt + maxshamt))
     return [w0, w1]
 
 def ClipByVal(a):
-    return tf.where(a == 0, a, tf.divide(tf.clip_by_value(tf.floor(tf.multiply(a, 1 << defshamt)), -32, 31), 1 << defshamt))
-def ClipLayer():
-    return Lambda(ClipByVal)
+    a = tf.floor(tf.multiply(a, 1 << args.cliplow))
+    b = 1 << (args.cliphigh + args.cliplow - 1)
+    a = tf.clip_by_value(a, -b, b-1)
+    a = tf.divide(a, 1 << args.cliplow)
+    return a
 
 def insertlayer(model, layer_id, new_layer):
     layers = [l for l in model.layers]
@@ -186,10 +183,9 @@ def insertlayer(model, layer_id, new_layer):
     return model
 
 def fptest(model):
-    np.random.seed(41)
-    testin = np.random.randint(8, size=(32, 32, 3))
+    testin = np.random.randint(1 << args.posterize, size=model.layers[0].input_shape[0][1:])
     
-    image = testin / 8
+    image = testin / (1 << args.posterize)
     image = np.expand_dims(image, axis=0)
     inp = model.input
     partial_model = Model(model.inputs, model.layers[1].output)
@@ -198,8 +194,8 @@ def fptest(model):
     eximages = [func([image], training=False)[0] for func in functors]
     
     from fpsimulate import fpsimulate
-    image = testin / 8
-    images = fpsimulate(model.layers, image)
+    image = testin / (1 << args.posterize)
+    images = fpsimulate(model.layers, image, (args.cliplow, args.cliphigh))
     
     for i, image in enumerate(images):
         print(f'layer {i}')
@@ -209,16 +205,15 @@ def fptest(model):
     print(np.argmax(images[-1]) == np.argmax(eximages[-1]))
 
 def fpinttest(model):
-    np.random.seed(41)
-    testin = np.random.randint(8, size=(32, 32, 3))
+    testin = np.random.randint(1 << args.posterize, size=model.layers[0].input_shape[0][1:])
     
     from fpsimulate import fpsimulate
-    image = testin / 8
-    fpimages = fpsimulate(model.layers, image, False, False)
+    image = testin / (1 << args.posterize)
+    fpimages = fpsimulate(model.layers, image, (args.cliplow, args.cliphigh), False, False)
     
     from intsimulate import intsimulate
-    image = (testin, 3)
-    images = intsimulate(model.layers, image)
+    image = (testin, args.posterize)
+    images = intsimulate(model.layers, image, (args.cliplow, args.cliphigh))
     
     for i, image in enumerate(images):
         print(f'layer {i}')
@@ -228,31 +223,32 @@ def fpinttest(model):
 
 
 def intverilogtest(model):
-    np.random.seed(41)
-    testin = np.random.randint(8, size=(32, 32, 3))
+    testin = np.random.randint(1 << args.posterize, size=model.layers[0].input_shape[0][1:])
     
     from intsimulate import intsimulate
-    image = (testin, 3)
-    intimages = intsimulate(model.layers, image)
+    image = (testin, args.posterize)
+    intimages = intsimulate(model.layers, image, (args.cliplow, args.cliphigh))
         
     from genverilog import genverilog
     import datetime
     dirname = 'test_' + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     os.mkdir(dirname)
     os.chdir(dirname)
-    image = (np.shape(testin), 3, 3)
-    images = genverilog(model.layers, image, 'test')
+    image = (np.shape(testin), args.posterize, args.posterize)
+    images = genverilog(model.layers, image, (args.cliplow, args.cliphigh), 'test')
 
     infile = open('inp.txt', mode='w')
-    infile.write(f'{testin.size * 3} 1\n')
-    for i in range(testin.size * 3):
+    infile.write(f'{testin.size * args.posterize} 1\n')
+    for i in range(testin.size * args.posterize):
         infile.write(f'in[{i}] ')
     infile.write('\n')
     for i in range(np.shape(testin)[0]):
         for j in range(np.shape(testin)[1]):
             for k in range(np.shape(testin)[2]):
-                l = testin[i][j][k]
-                infile.write(f'{l%2} {l//2%2} {l//4%2} ')
+                tmp = testin[i][j][k]
+                for l in range(args.posterize):
+                    infile.write(f'{tmp%2} ')
+                    tmp //= 2
     infile.seek(infile.tell() - 1, os.SEEK_SET)
     infile.write('\n')
     infile.close()
@@ -260,8 +256,8 @@ def intverilogtest(model):
     outfile = open('out.txt', mode='w')
     outnum = intimages[-1][0].size
     bitwidth = images[-1][2]
-    outfile.write(f'{testin.size * 3} {outnum * bitwidth} 1\n')
-    for i in range(testin.size * 3):
+    outfile.write(f'{testin.size * args.posterize} {outnum * bitwidth} 1\n')
+    for i in range(testin.size * args.posterize):
         outfile.write(f'in[{i}] ')
     for i in range(outnum * bitwidth):
         outfile.write(f'out[{i}] ')
@@ -270,8 +266,10 @@ def intverilogtest(model):
     for i in range(np.shape(testin)[0]):
         for j in range(np.shape(testin)[1]):
             for k in range(np.shape(testin)[2]):
-                l = testin[i][j][k]
-                outfile.write(f'{l%2} {l//2%2} {l//4%2} ')
+                tmp = testin[i][j][k]
+                for l in range(args.posterize):
+                    outfile.write(f'{tmp%2} ')
+                    tmp //= 2
     oimage = intimages[-1][0].flatten()
     for i in range(oimage.size):
         tmp = oimage[i]
@@ -282,6 +280,7 @@ def intverilogtest(model):
     outfile.write('\n')
     outfile.close()
 
+    print('running yosys')
     cmd = args.yosys + ' -p \"read_verilog test*.v; synth -auto-top; write_verilog a.v; flatten; aigmap; write_blif a.blif\"'
     if os.system(cmd):
         print('yosys failed')
@@ -298,6 +297,7 @@ def intverilogtest(model):
     if os.system(cmd):
         print('diff failed')
         exit(1)
+    print('verified aig')
 
     os.chdir('..')
 
@@ -312,14 +312,16 @@ quantized_filepath = 'small_quantized.h5'
 if args.quant:
     model = getmodel()
     layerid = 0
+    cshamt = args.posterize
     while layerid < len(model.layers):
         layername = model.layers[layerid].__class__.__name__
         if layername == 'Conv2D' or layername == 'Dense':
             if layerid < len(model.layers) - 1: # not last layer
-                model = insertlayer(model, layerid+1, ClipLayer())
+                model = insertlayer(model, layerid+1, Lambda(ClipByVal))
             model.load_weights(checkpoint_filepath)
             weights = model.layers[layerid].get_weights()
-            weights = quantizeconv(weights)
+            weights = quantize(weights, cshamt)
+            cshamt = args.cliplow
             model.layers[layerid].set_weights(weights)
             for i in range(layerid+1):
                 model.layers[i].trainable = False
@@ -329,22 +331,27 @@ if args.quant:
                 break
             checkpoint_filepath = f'small_quant{layerid}.h5'
             trainmodel(model, checkpoint_filepath)
+        elif layername == 'AveragePooling2D':
+            cshamt += int(round(math.log2(functools.reduce(lambda x,y: x*y, model.layers[layerid].pool_size))))
         layerid += 1
     model.save_weights(quantized_filepath)
     print(model.get_weights())
-    
-if args.verilog:    
+
+if args.fptest or args.inttest or args.verilog:
     model = getmodel()
     for layerid in range(len(model.layers)-1):
         layername = model.layers[layerid].__class__.__name__
         if layername == 'Conv2D' or layername == 'Dense':
-            model = insertlayer(model, layerid+1, ClipLayer())
+            model = insertlayer(model, layerid+1, Lambda(ClipByVal))
     model.load_weights(quantized_filepath)
 
     print(model.summary())
-    #fptest(model)
-    #fpinttest(model)
-    intverilogtest(model)
+    if args.fptest:
+        fptest(model)
+    if args.inttest:
+        fpinttest(model)
+    if args.verilog:
+        intverilogtest(model)
 
 
 
