@@ -218,6 +218,48 @@ def genverilogmaxp(image, pool_size, name):
     f.write('endmodule\n')
     return ((nox, noy, nft), cshamt, bitwidth)
 
+'''
+assume valid padding, as much stride
+'''
+def genverilogavep(image, pool_size, name):
+    cbitwidth = image[2]
+    cshamt = image[1]
+    nx = image[0][0]
+    ny = image[0][1]
+    nft = image[0][2]
+    nkx = pool_size[0]
+    nky = pool_size[1]
+    shamt = int(round(math.log2(nkx * nky)))
+    nox = (nx - nkx) // nkx + 1
+    noy = (ny - nky) // nky + 1
+    ninputs = nx * ny * nft
+    noutputs = nox * noy * nft
+    bitwidth = cbitwidth + shamt
+    f = open(f'{name}.v', mode='w')
+    f.write(f'module {name} (\n')
+    f.write(f'input [{ninputs*cbitwidth}-1:0] in,\n')
+    f.write(f'output [{noutputs*bitwidth}-1:0] out);\n')
+    f.write(f'wire signed [{cbitwidth}-1:0] p [0:{ninputs}-1];\n')
+    f.write('genvar i;\n')
+    f.write(f'generate for(i = 0; i < {ninputs}; i = i + 1) begin : parse\n')
+    f.write(f'assign p[i] = {{1\'b0, in[{cbitwidth}*(i+1)-1:{cbitwidth}*i]}};\n')
+    f.write('end endgenerate\n')
+    f.write(f'wire signed [{bitwidth}-1:0] po [0:{noutputs}-1];\n')
+    f.write(f'generate for(i = 0; i < {noutputs}; i = i + 1) begin : parseout\n')
+    f.write(f'assign out[{bitwidth}*(i+1)-1:{bitwidth}*i] = po[i];\n')
+    f.write('end endgenerate\n')
+    f.write('genvar j, k;\n')
+    f.write(f'generate for(i = 0; i < {nx - nkx + 1}; i = i + {nkx}) begin : poolx\n')
+    f.write(f'for(j = 0; j < {ny - nky + 1}; j = j + {nky}) begin : pooly\n')
+    f.write(f'for(k = 0; k < {nft}; k = k + 1) begin : poolz\n')
+    f.write(f'assign po[k+j/{nky}*{nft}+i/{nkx}*{nft}*{noy}] =')
+    for dx in range(nkx):
+        for dy in range(nky):
+            f.write(f' + p[k+(j+{dy})*{nft}+(i+{dx})*{nft}*{ny}]')
+    f.write(';\n')
+    f.write('end end end endgenerate\n')
+    f.write('endmodule\n')
+    return ((nox, noy, nft), cshamt + shamt, bitwidth)
 
 '''
 assume 1d input image
@@ -294,7 +336,8 @@ def genverilog(layers, image, name):
             image = genverilogmaxp(image, layer.pool_size, modulename)
             submodules.append((i, modulename))
         elif layername == 'AveragePooling2D':
-            print('not_supported')
+            image = genverilogavep(image, layer.pool_size, modulename)
+            submodules.append((i, modulename))
         elif layername == 'Flatten':
             image = ((image[0][0] * image[0][1] * image[0][2], 1, 1), image[1], image[2])
         elif layername == 'Dense':

@@ -109,12 +109,13 @@ def intsimulateavep(image, pool_size):
     nft = np.shape(image)[2]
     nkx = pool_size[0]
     nky = pool_size[1]
+    shamt = int(round(math.log2(nkx * nky)))
     imageout = np.zeros(((nx - nkx) // nkx + 1, (ny - nky) // nky + 1, nft), dtype='int64')
     for x in range(0, nx - nkx + 1, nkx):
         for y in range(0, ny - nky + 1, nky):
             for ft in range(nft):
-                imageout[x//nkx][y//nky][ft] = np.average(image[x:x+nkx,y:y+nky,ft])
-    return (imageout, cshamt)
+                imageout[x//nkx][y//nky][ft] += np.sum(image[x:x+nkx,y:y+nky,ft])
+    return (imageout, cshamt + shamt)
 
 '''
 assume 1d input image
