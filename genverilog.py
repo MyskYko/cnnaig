@@ -280,7 +280,7 @@ def genverilogdense(image, weights, name):
     m = np.shape(w0)[1]
     ninputs = n
     noutputs = m
-    bitwidth = cbitwidth + (n+1-1).bit_length()
+    bitwidth = cbitwidth + (n+1-1).bit_length() + shamt
     f = open(f'{name}.v', mode='w')
     f.write(f'module {name} (\n')
     f.write(f'input [{ninputs*cbitwidth}-1:0] in,\n')
