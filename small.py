@@ -17,6 +17,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--train', action='store_true', help="do training")
 parser.add_argument('--quant', action='store_true', help="do quantization")
 parser.add_argument('--verilog', action='store_true', help="generate verilog and synthesize aig")
+parser.add_argument('--epoch', type=int, help="train epoch", default=1)
 parser.add_argument('--posterize', type=int, help="input bitwidth per color", default=3)
 parser.add_argument('--cliplow', type=int, help="bits below binary point after clipping", default=3)
 parser.add_argument('--cliphigh', type=int, help="bits above binary point after clipping", default=3)
@@ -47,8 +48,6 @@ def getmodel():
     x = Dense(10, activation='softmax')(x)
     model = Model(inputs=inputs, outputs=x)
     return model
-
-ntrainepoch = 1
 
 ########## TO HERE ##########
 
@@ -118,7 +117,7 @@ def trainmodel(model, filepath):
     save_best_only=True)
     
     # Train the network
-    history = model.fit(it_train, validation_data=(valX, valY), epochs=ntrainepoch, callbacks=[model_checkpoint_callback])
+    history = model.fit(it_train, validation_data=(valX, valY), epochs=args.epoch, callbacks=[model_checkpoint_callback])
 
     # Compute accuracy on the test set
     model.load_weights(filepath)
