@@ -14,6 +14,7 @@ from tensorflow.keras.layers import Lambda
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument('name', help='model name (prefix for files)')
 parser.add_argument('--train', action='store_true', help="do training")
 parser.add_argument('--quant', action='store_true', help="do quantization")
 parser.add_argument('--verilog', action='store_true', help="generate verilog and synthesize aig")
@@ -41,9 +42,9 @@ def getmodel():
     # Define the model
     inputs = Input((32, 32, args.posterize))
     x = inputs
-    x = Conv2D(3, (3, 3), strides=(3, 3), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
-    x = Conv2D(3, (3, 3), strides=(2, 2), padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
-    x = AveragePooling2D((2,2))(x)
+    x = Conv2D(5, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = MaxPooling2D((2,2))(x)
+    x = Conv2D(6, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
     x = Flatten()(x)
     x = Dense(10, activation='softmax')(x)
     model = Model(inputs=inputs, outputs=x)
@@ -177,8 +178,8 @@ def insertlayer(model, layer_id, new_layer):
             x = new_layer(x)
         x = layers[i](x)
     model = Model(inputs=layers[0].input, outputs=x)
-    model.save("_tmp_model")
-    model = tf.keras.models.load_model("_tmp_model")    
+    model.save(f"{args.name}/tmp_model")
+    model = tf.keras.models.load_model(f"{args.name}/tmp_model")
     return model
 
 def fptest(model):
@@ -229,10 +230,7 @@ def intverilogtest(model):
     intimages = intsimulate(model.layers, image, (args.cliplow, args.cliphigh))
         
     from genverilog import genverilog
-    import datetime
-    dirname = 'test_' + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    os.mkdir(dirname)
-    os.chdir(dirname)
+    os.chdir(args.name)
     image = (np.shape(testin), args.posterize, args.posterize)
     images = genverilog(model.layers, image, (args.cliplow, args.cliphigh), 'test')
 
@@ -302,12 +300,15 @@ def intverilogtest(model):
 
 
 
-checkpoint_filepath = 'small_float.h5'
+if not os.path.exists(args.name):
+    os.mkdir(args.name)
+
+checkpoint_filepath = f'{args.name}/float.h5'
 if args.train:
     model = getmodel()
     trainmodel(model, checkpoint_filepath)
 
-quantized_filepath = 'small_quantized.h5'
+quantized_filepath = f'{args.name}/quantized.h5'
 if args.quant:
     model = getmodel()
     layerid = 0
@@ -328,7 +329,7 @@ if args.quant:
             if layerid == len(model.layers) - 1:
                 print(model.summary())
                 break
-            checkpoint_filepath = f'small_quant{layerid}.h5'
+            checkpoint_filepath = f'{args.name}/quant{layerid}.h5'
             trainmodel(model, checkpoint_filepath)
         elif layername == 'AveragePooling2D':
             cshamt += int(round(math.log2(functools.reduce(lambda x,y: x*y, model.layers[layerid].pool_size))))
