@@ -14,7 +14,7 @@ from tensorflow.keras.layers import Lambda
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('name', help='model name (prefix for files)')
+parser.add_argument('name', help='directory to save file (created if not exist)')
 parser.add_argument('--train', action='store_true', help="do training")
 parser.add_argument('--quant', action='store_true', help="do quantization")
 parser.add_argument('--verilog', action='store_true', help="generate verilog and synthesize aig")
@@ -60,6 +60,12 @@ try:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
 except:
     print('no gpu loaded')
+
+# Download binary data
+binarycifar10 = os.path.dirname(os.path.abspath(__file__)) + '/cifar-10-batches-bin'
+if not os.path.exists(binarycifar10):
+    cmd = 'wget https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz && tar xvf cifar-10-binary.tar.gz'
+    os.system(cmd)
     
 # Set seed to replicate results
 tf.random.set_seed(42)
@@ -114,8 +120,8 @@ def trainmodel(model, filepath):
         save_weights_only=True,
         verbose=1,
         monitor='val_acc',
-    mode='max',
-    save_best_only=True)
+        mode='max',
+        save_best_only=True)
     
     # Train the network
     history = model.fit(it_train, validation_data=(valX, valY), epochs=args.epoch, callbacks=[model_checkpoint_callback])
@@ -196,13 +202,11 @@ def fptest(model):
     from fpsimulate import fpsimulate
     image = testin / (1 << args.posterize)
     images = fpsimulate(model.layers, image, (args.cliplow, args.cliphigh))
-    
     for i, image in enumerate(images):
         print(f'layer {i}')
         print(f'diff num: {np.count_nonzero(image != eximages[i])} / {image.size}')
         a = np.where(eximages[i] != 0, image / eximages[i], 1)
         print(f'ratio: {a.min()} ~ {a.max()}')
-    print(np.argmax(images[-1]) == np.argmax(eximages[-1]))
 
 def fpinttest(model):
     testin = np.random.randint(1 << args.posterize, size=model.layers[0].input_shape[0][1:])
@@ -221,14 +225,13 @@ def fpinttest(model):
         a = np.where(fpimages[i] != 0, image[0] / (1 << image[1]) / fpimages[i], 1)
         print(f'ratio: {a.min()} ~ {a.max()}')
 
-
 def intverilogtest(model):
     testin = np.random.randint(1 << args.posterize, size=model.layers[0].input_shape[0][1:])
-    
+
     from intsimulate import intsimulate
     image = (testin, args.posterize)
     intimages = intsimulate(model.layers, image, (args.cliplow, args.cliphigh))
-        
+
     from genverilog import genverilog
     os.chdir(args.name)
     image = (np.shape(testin), args.posterize, args.posterize)
@@ -295,6 +298,84 @@ def intverilogtest(model):
         print('diff failed')
         exit(1)
     print('verified aig')
+
+    topfile = open('top.blif', mode='w')
+    topfile.write('.model top\n')
+    topfile.write('.inputs')
+    for color in ['r', 'g', 'b']:
+        for i in range(32):
+            for j in range(32):
+                for k in range(8):
+                    topfile.write(f' {color}_{i}_{j}_{k}')
+    topfile.write('\n')
+    topfile.write('.outputs')
+    for i in range(10):
+        topfile.write(f' o{i}')
+    topfile.write('\n')
+    topfile.write('.subckt test')
+    inpcnt = 0
+    for i in range(32):
+        for j in range(32):
+            for color in ['r', 'g', 'b']:
+                for k in range(args.posterize):
+                    topfile.write(f' in[{inpcnt}]={color}_{i}_{j}_{k + 8 - args.posterize}')
+                    inpcnt += 1
+    for i in range(10 * bitwidth):
+        topfile.write(f' out[{i}]=out[{i}]')
+    topfile.write('\n')
+    topfile.write('.subckt comp')
+    for i in range(10 * bitwidth):
+        topfile.write(f' in[{i}]=out[{i}]')
+    for i in range(10):
+        topfile.write(f' out[{i}]=o{i}')
+    topfile.write('\n')
+    topfile.write('.end\n')
+    topfile.close()
+
+    compfile = open('comp.v', mode='w')
+    compfile.write(f'module comp (\n')
+    compfile.write(f'input [{10 * bitwidth}-1:0] in,\n')
+    compfile.write(f'output [10-1:0] out);\n')
+    compfile.write(f'wire signed [{bitwidth}-1:0] p [0:10-1];\n')
+    compfile.write('genvar i;\n')
+    compfile.write(f'generate for(i = 0; i < 10; i = i + 1) begin : parse\n')
+    compfile.write(f'assign p[i] = in[{bitwidth}*(i+1)-1:{bitwidth}*i];\n')
+    compfile.write('end endgenerate\n')
+    comps = [[] for i in range(10)]
+    nlevel = 0
+    length = 10
+    for j in range(length):
+        compfile.write(f'wire signed [{bitwidth}-1:0] tmp{nlevel}_{j} = p[{j}];\n')
+    while length > 1:
+        nlevel += 1
+        nextlength = (length // 2) + (length % 2)
+        for j in range(nextlength):
+            if 2 * j + 1 < length:
+                compfile.write(f'wire comp{nlevel}_{j} = tmp{nlevel-1}_{2*j} < tmp{nlevel-1}_{2*j+1};\n')
+                compfile.write(f'wire signed [{bitwidth}-1:0] tmp{nlevel}_{j} = comp{nlevel}_{j} ? tmp{nlevel-1}_{2*j+1} : tmp{nlevel-1}_{2*j};\n')
+                nrange = 2 ** (nlevel - 1)
+                for k in range(2 * j * nrange, (2 * j + 1) * nrange):
+                    comps[k].append(f'~comp{nlevel}_{j}')
+                for k in range((2 * j + 1) * nrange, min((2 * j + 2) * nrange, 10)):
+                    comps[k].append(f'comp{nlevel}_{j}')
+            else:
+                compfile.write(f'wire signed [{bitwidth}-1:0] tmp{nlevel}_{j} = tmp{nlevel-1}_{2*j};\n')
+        length = nextlength
+    for j in range(10):
+        compfile.write(f'assign out[{j}] = {comps[j][0]}')
+        for comp in comps[j][1:]:
+            compfile.write(f' && {comp}')
+        compfile.write(';\n')
+    compfile.write('endmodule\n')
+    compfile.close()
+    cmd = args.yosys + ' -p \"read_verilog comp.v; synth; aigmap; write_blif comp.blif\"'
+    os.system(cmd)
+
+    cmd = 'cat comp.blif b.blif >> top.blif'
+    os.system(cmd)
+
+    cmd = args.abc + f' -c \"read top.blif; strash; write_aiger top.aig; &get; &iwls21test {binarycifar10}/data_batch_1.bin\"'
+    os.system(cmd)
 
     os.chdir('..')
 
