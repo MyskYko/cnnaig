@@ -83,10 +83,10 @@ y_train = to_categorical(y_train)
 y_test = to_categorical(y_test)
 
 # Do not use test set for now
-x_test = x_train[40000:]
-y_test = y_train[40000:]
-x_train = x_train[:40000]
-y_train = y_train[:40000]
+x_test = x_train[:10000]
+y_test = y_train[:10000]
+x_train = x_train[10000:]
+y_train = y_train[10000:]
 
 # Split training data into training and validation sets
 train_size = int(x_train.shape[0] * 0.8)
