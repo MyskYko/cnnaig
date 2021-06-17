@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, AveragePooling2D, Dense, Flatten, Dropout, BatchNormalization
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.layers import Lambda
+from tensorflow.keras.layers import *
+from qkeras import *
 
 
 
@@ -42,11 +42,14 @@ def getmodel():
     # Define the model
     inputs = Input((32, 32, args.posterize))
     x = inputs
-    x = Conv2D(5, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = QConv2D(5, (3, 3), 2, 'same', kernel_quantizer=f"quantized_po2({args.maxshamt}, 1)", bias_quantizer=f"ternary({args.posterize + args.maxshamt}, 1)")(x)
+    x = QActivation(f"quantized_relu({args.cliplow + args.cliphigh}, {args.cliphigh})")(x)
     x = MaxPooling2D((2,2))(x)
-    x = Conv2D(6, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = QConv2D(6, (3, 3), 2, 'same', kernel_quantizer=f"quantized_po2({args.maxshamt}, 1)", bias_quantizer=f"ternary({args.cliplow + args.maxshamt}, 1)")(x)
+    x = QActivation(f"quantized_relu({args.cliplow + args.cliphigh}, {args.cliphigh})")(x)
     x = Flatten()(x)
-    x = Dense(10, activation='softmax')(x)
+    x = QDense(10, kernel_quantizer=f"quantized_po2({args.maxshamt}, 1)", bias_quantizer=f"ternary({args.cliplow + args.maxshamt}, 1)")(x)
+    x = Activation("softmax")(x)
     model = Model(inputs=inputs, outputs=x)
     return model
 
@@ -127,6 +130,8 @@ def trainmodel(model, filepath):
     history = model.fit(it_train, validation_data=(valX, valY), epochs=args.epoch, callbacks=[model_checkpoint_callback])
 
     # Compute accuracy on the test set
+    model.load_weights(filepath)
+    utils.model_save_quantized_weights(model, filepath)
     model.load_weights(filepath)
     [loss, acc] = model.evaluate(x_test, y_test)
     print('Loss:', loss)
@@ -392,38 +397,12 @@ if args.train:
 quantized_filepath = f'{args.name}/quantized.h5'
 if args.quant:
     model = getmodel()
-    layerid = 0
-    cshamt = args.posterize
-    while layerid < len(model.layers):
-        layername = model.layers[layerid].__class__.__name__
-        if layername == 'Conv2D' or layername == 'Dense':
-            if layerid < len(model.layers) - 1: # not last layer
-                model = insertlayer(model, layerid+1, Lambda(ClipByVal))
-            model.load_weights(checkpoint_filepath)
-            weights = model.layers[layerid].get_weights()
-            weights = quantize(weights, cshamt)
-            cshamt = args.cliplow
-            model.layers[layerid].set_weights(weights)
-            for i in range(layerid+1):
-                model.layers[i].trainable = False
-            evalmodel(model)
-            if layerid == len(model.layers) - 1:
-                print(model.summary())
-                break
-            checkpoint_filepath = f'{args.name}/quant{layerid}.h5'
-            trainmodel(model, checkpoint_filepath)
-        elif layername == 'AveragePooling2D':
-            cshamt += int(round(math.log2(functools.reduce(lambda x,y: x*y, model.layers[layerid].pool_size))))
-        layerid += 1
+    model.load_weights(checkpoint_filepath)
     model.save_weights(quantized_filepath)
     print(model.get_weights())
 
 if args.fptest or args.inttest or args.verilog:
     model = getmodel()
-    for layerid in range(len(model.layers)-1):
-        layername = model.layers[layerid].__class__.__name__
-        if layername == 'Conv2D' or layername == 'Dense':
-            model = insertlayer(model, layerid+1, Lambda(ClipByVal))
     model.load_weights(quantized_filepath)
 
     print(model.summary())

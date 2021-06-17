@@ -63,6 +63,14 @@ def fpsimulateclip(image, cliprange):
     return np.clip(np.floor(image * a), -b, b-1) / a
 
 '''
+specific clipping for this model
+'''
+def fpsimulateclip2(image, cliprange):
+    a = 1 << cliprange[0]
+    b = 1 << (cliprange[0] + cliprange[1])
+    return np.minimum(np.round(image * a), b) / a
+
+'''
 assume valid padding, as much stride
 '''
 def fpsimulatemaxp(image, pool_size):
@@ -117,19 +125,21 @@ def fpsimulate(layers, image, cliprange, fdiv = True, fsoftmax = True):
     for i, layer in enumerate(layers):
         layername = layer.__class__.__name__
         print(layername)
-        if layername == 'Conv2D':
+        if layername == 'Conv2D' or layername == 'QConv2D':
             image = fpsimulateconv(image, layer.get_weights(), layer.strides)
         elif layername == 'BatchNormalization':
             image = fpsimulatenorm(image, layer.get_weights(), fdiv)
         elif layername == 'Lambda':
             image = fpsimulateclip(image, cliprange)
+        elif layername == 'QActivation':
+            image = fpsimulateclip2(image, cliprange)
         elif layername == 'MaxPooling2D':
             image = fpsimulatemaxp(image, layer.pool_size)
         elif layername == 'AveragePooling2D':
             image = fpsimulateavep(image, layer.pool_size)
         elif layername == 'Flatten':
             image = image.flatten()
-        elif layername == 'Dense':
+        elif layername == 'Dense' or layername == 'QDense':
             image = fpsimulatedense(image, layer.get_weights(), fsoftmax)
         images.append(image)
     return images
