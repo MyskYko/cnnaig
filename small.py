@@ -24,6 +24,7 @@ parser.add_argument('--cliplow', type=int, help="bits below binary point after c
 parser.add_argument('--cliphigh', type=int, help="bits above binary point after clipping", default=3)
 parser.add_argument('--maxshamt', type=int, help="range of quantized weights is set to 2^a ~ 2^(a-maxshamt)", default=10)
 parser.add_argument('--pthold', type=int, help="prune edge with weight less than 2^(a-pthold)", default=10)
+parser.add_argument('--gray', action='store_true', help="use gray scaling")
 parser.add_argument('--yosys', help="yosys executable (and some options)", default='~/yosys/yosys -q -q')
 parser.add_argument('--abc', help="abc executable", default='~/abc/abc')
 parser.add_argument('--cadex', help="cadex executable", default=os.path.dirname(os.path.abspath(__file__)) + '/cadex')
@@ -40,7 +41,10 @@ maxshamt = max(args.maxshamt, args.pthold)
 
 def getmodel():
     # Define the model
-    inputs = Input((32, 32, 3))
+    if args.gray:
+        inputs = Input((32, 32, 1))
+    else:
+        inputs = Input((32, 32, 3))
     x = inputs
     x = Conv2D(5, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
     x = MaxPooling2D((2,2))(x)
@@ -73,6 +77,13 @@ np.random.seed(41)
 
 # Load the CIFAR-10 dataset
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
+
+if args.gray:
+    x_train = x_train[:,:,:,0] // 4 + x_train[:,:,:,1] // 2 + x_train[:,:,:,2] // 4
+    x_train = np.expand_dims(x_train, axis=3)
+    print(x_train.shape)
+    x_test = x_test[:,:,:,0] // 4 + x_test[:,:,:,1] // 2 + x_test[:,:,:,2] // 4
+    x_test = np.expand_dims(x_test, axis=3)
 
 # Convert 8-bit images to 3-bit and bring them to [0, 1] range
 x_train = np.floor(x_train / (1 << (8 - args.posterize))) / (1 << args.posterize)
@@ -302,7 +313,8 @@ def intverilogtest(model):
     topfile = open('top.blif', mode='w')
     topfile.write('.model top\n')
     topfile.write('.inputs')
-    for color in ['r', 'g', 'b']:
+    colors = ['r', 'g', 'b']
+    for color in colors:
         for i in range(32):
             for j in range(32):
                 for k in range(8):
@@ -312,11 +324,29 @@ def intverilogtest(model):
     for i in range(10):
         topfile.write(f' o{i}')
     topfile.write('\n')
+    if args.gray:
+        topfile.write('.subckt gray')
+        inpcnt = 0
+        for i in range(32):
+            for j in range(32):
+                for color in colors:
+                    for k in range(8):
+                        topfile.write(f' in[{inpcnt}]={color}_{i}_{j}_{k}')
+                        inpcnt += 1
+        outcnt = 0
+        colors = ['gray']
+        for i in range(32):
+            for j in range(32):
+                for color in colors:
+                    for k in range(8):
+                        topfile.write(f' out[{outcnt}]={color}_{i}_{j}_{k}')
+                        outcnt += 1
+        topfile.write('\n')
     topfile.write('.subckt test')
     inpcnt = 0
     for i in range(32):
         for j in range(32):
-            for color in ['r', 'g', 'b']:
+            for color in colors:
                 for k in range(args.posterize):
                     topfile.write(f' in[{inpcnt}]={color}_{i}_{j}_{k + 8 - args.posterize}')
                     inpcnt += 1
@@ -373,6 +403,27 @@ def intverilogtest(model):
 
     cmd = 'cat comp.blif b.blif >> top.blif'
     os.system(cmd)
+
+    if args.gray:
+        bitwidth = 8
+        grayfile = open('gray.v', mode='w')
+        grayfile.write(f'module gray (\n')
+        grayfile.write(f'input [{32*32*3*bitwidth}-1:0] in,\n')
+        grayfile.write(f'output [{32*32*bitwidth}-1:0] out);\n')
+        grayfile.write(f'wire signed [{bitwidth}-1:0] p [0:{32*32*3}-1];\n')
+        grayfile.write('genvar i;\n')
+        grayfile.write(f'generate for(i = 0; i < {32*32*3}; i = i + 1) begin : parse\n')
+        grayfile.write(f'assign p[i] = in[{bitwidth}*(i+1)-1:{bitwidth}*i];\n')
+        grayfile.write('end endgenerate\n')
+        grayfile.write(f'generate for(i = 0; i < {32*32}; i = i + 1) begin : parseout\n')
+        grayfile.write(f'assign out[{bitwidth}*(i+1)-1:{bitwidth}*i] = p[3*i][{bitwidth}-1:2] + p[3*i+1][{bitwidth}-1:1] + p[3*i+2][{bitwidth}-1:2];\n')
+        grayfile.write('end endgenerate\n')
+        grayfile.write('endmodule\n')
+        grayfile.close()
+        cmd = args.yosys + ' -p \"read_verilog gray.v; synth; aigmap; write_blif gray.blif\"'
+        os.system(cmd)
+        cmd = 'cat gray.blif >> top.blif'
+        os.system(cmd)
 
     cmd = args.abc + f' -c \"read top.blif; strash; write_aiger top.aig; &get; &iwls21test {binarycifar10}/data_batch_1.bin\"'
     os.system(cmd)
