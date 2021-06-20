@@ -40,7 +40,7 @@ maxshamt = max(args.maxshamt, args.pthold)
 
 def getmodel():
     # Define the model
-    inputs = Input((32, 32, args.posterize))
+    inputs = Input((32, 32, 3))
     x = inputs
     x = Conv2D(5, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
     x = MaxPooling2D((2,2))(x)
