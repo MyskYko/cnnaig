@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, AveragePooling2D, Dense, Flatten, Dropout, BatchNormalization
+from tensorflow.keras.layers import *
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.layers import Lambda
+from qkeras import *
 
 
 
@@ -187,16 +187,21 @@ def ClipByVal(a):
     a = tf.divide(a, 1 << args.cliplow)
     return a
 
-def insertlayer(model, layer_id, new_layer):
+def insertlayer(model, layer_id, new_layer, replace = False):
     layers = [l for l in model.layers]
     x = layers[0].output
     for i in range(1, len(layers)):
         if i == layer_id:
             x = new_layer(x)
-        x = layers[i](x)
+            if not replace:
+                x = layers[i](x)
+        else:
+            x = layers[i](x)
+    if layer_id == len(layers):
+        x = new_layer(x)
     model = Model(inputs=layers[0].input, outputs=x)
     model.save(f"{args.name}/tmp_model")
-    model = tf.keras.models.load_model(f"{args.name}/tmp_model")
+    model = utils.load_qmodel(f"{args.name}/tmp_model")
     return model
 
 def fptest(model):
@@ -447,9 +452,8 @@ if args.quant:
     cshamt = args.posterize
     while layerid < len(model.layers):
         layername = model.layers[layerid].__class__.__name__
-        if layername == 'Conv2D' or layername == 'Dense':
-            if layerid < len(model.layers) - 1: # not last layer
-                model = insertlayer(model, layerid+1, Lambda(ClipByVal))
+        if layername == 'Conv2D':
+            model = insertlayer(model, layerid+1, Lambda(ClipByVal))
             model.load_weights(checkpoint_filepath)
             weights = model.layers[layerid].get_weights()
             weights = quantize(weights, cshamt)
@@ -463,10 +467,21 @@ if args.quant:
                 break
             checkpoint_filepath = f'{args.name}/quant{layerid}.h5'
             trainmodel(model, checkpoint_filepath)
+        elif layername == 'Dense':
+            model = insertlayer(model, layerid, QDense(10, kernel_quantizer=f"quantized_po2({args.maxshamt}, 1)", bias_quantizer=f"ternary({cshamt + args.maxshamt}, 1)"), True)
+            model = insertlayer(model, layerid+1, Activation("softmax"))
+            model.load_weights(checkpoint_filepath)
+            cshamt = args.cliplow
+            for i in range(layerid-1):
+                model.layers[i].trainable = False
+            evalmodel(model)
+            checkpoint_filepath = f'{args.name}/quant{layerid}.h5'
+            trainmodel(model, checkpoint_filepath)
         elif layername == 'AveragePooling2D':
             cshamt += int(round(math.log2(functools.reduce(lambda x,y: x*y, model.layers[layerid].pool_size))))
         layerid += 1
-    model.save_weights(quantized_filepath)
+    utils.model_save_quantized_weights(model, quantized_filepath)
+    model.load_weights(quantized_filepath)
     print(model.get_weights())
 
 if args.fptest or args.inttest or args.verilog:
