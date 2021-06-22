@@ -468,7 +468,7 @@ if args.quant:
             checkpoint_filepath = f'{args.name}/quant{layerid}.h5'
             trainmodel(model, checkpoint_filepath)
         elif layername == 'Dense':
-            model = insertlayer(model, layerid, QDense(10, kernel_quantizer=f"quantized_po2({args.maxshamt}, 1)", bias_quantizer=f"ternary({cshamt + args.maxshamt}, 1)"), True)
+            model = insertlayer(model, layerid, QDense(10, kernel_quantizer=f"quantized_po2({maxshamt}, 1)", bias_quantizer=f"ternary({cshamt + maxshamt}, 1)"), True)
             model = insertlayer(model, layerid+1, Activation("softmax"))
             model.load_weights(checkpoint_filepath)
             cshamt = args.cliplow
