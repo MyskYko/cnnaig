@@ -415,7 +415,7 @@ def intverilogtest(model):
         grayfile.write(f'module gray (\n')
         grayfile.write(f'input [{32*32*3*bitwidth}-1:0] in,\n')
         grayfile.write(f'output [{32*32*bitwidth}-1:0] out);\n')
-        grayfile.write(f'wire signed [{bitwidth}-1:0] p [0:{32*32*3}-1];\n')
+        grayfile.write(f'wire [{bitwidth}-1:0] p [0:{32*32*3}-1];\n')
         grayfile.write('genvar i;\n')
         grayfile.write(f'generate for(i = 0; i < {32*32*3}; i = i + 1) begin : parse\n')
         grayfile.write(f'assign p[i] = in[{bitwidth}*(i+1)-1:{bitwidth}*i];\n')
