@@ -16,14 +16,14 @@ from qkeras import *
 parser = argparse.ArgumentParser()
 parser.add_argument('name', help='directory to save file (created if not exist)')
 parser.add_argument('--train', action='store_true', help="do training")
-parser.add_argument('--quant', action='store_true', help="do quantization")
+parser.add_argument('--quant', type=int, help="do quantization", default=-1)
 parser.add_argument('--verilog', action='store_true', help="generate verilog and synthesize aig")
 parser.add_argument('--epoch', type=int, help="train epoch", default=1)
 parser.add_argument('--posterize', type=int, help="input bitwidth per color", default=3)
 parser.add_argument('--cliplow', type=int, help="bits below binary point after clipping", default=3)
 parser.add_argument('--cliphigh', type=int, help="bits above binary point after clipping", default=3)
-parser.add_argument('--maxshamt', type=int, help="range of quantized weights is set to 2^a ~ 2^(a-maxshamt)", default=10)
-parser.add_argument('--pthold', type=int, help="prune edge with weight less than 2^(a-pthold)", default=10)
+parser.add_argument('--maxshamt', type=int, help="range of quantized weights is set to 2^a ~ 2^(a-maxshamt)", default=3)
+parser.add_argument('--pthold', type=int, help="prune edge with weight less than 2^(a-pthold)", default=3)
 parser.add_argument('--gray', action='store_true', help="use gray scaling")
 parser.add_argument('--yosys', help="yosys executable (and some options)", default='~/yosys/yosys -q -q')
 parser.add_argument('--abc', help="abc executable", default='~/abc/abc')
@@ -48,7 +48,9 @@ def getmodel():
     x = inputs
     x = Conv2D(5, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
     x = MaxPooling2D((2,2))(x)
-    x = Conv2D(6, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = Conv2D(10, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = Conv2D(20, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
+    x = Conv2D(40, (3, 3), strides=2, padding='same', activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)
     x = Flatten()(x)
     x = Dense(10, activation='softmax')(x)
     model = Model(inputs=inputs, outputs=x)
@@ -446,7 +448,7 @@ if args.train:
     trainmodel(model, checkpoint_filepath)
 
 quantized_filepath = f'{args.name}/quantized.h5'
-if args.quant:
+if args.quant >= 0:
     model = getmodel()
     layerid = 0
     cshamt = args.posterize
@@ -454,6 +456,11 @@ if args.quant:
         layername = model.layers[layerid].__class__.__name__
         if layername == 'Conv2D':
             model = insertlayer(model, layerid+1, Lambda(ClipByVal))
+            if args.quant > layerid:
+                cshamt = args.cliplow
+                checkpoint_filepath = f'{args.name}/quant{layerid}.h5'
+                layerid += 1
+                continue
             model.load_weights(checkpoint_filepath)
             weights = model.layers[layerid].get_weights()
             weights = quantize(weights, cshamt)
@@ -468,7 +475,7 @@ if args.quant:
             checkpoint_filepath = f'{args.name}/quant{layerid}.h5'
             trainmodel(model, checkpoint_filepath)
         elif layername == 'Dense':
-            model = insertlayer(model, layerid, QDense(10, kernel_quantizer=f"quantized_po2({maxshamt}, 1)", bias_quantizer=f"ternary({cshamt + maxshamt}, 1)"), True)
+            model = insertlayer(model, layerid, QDense(10, kernel_quantizer=f"quantized_po2({maxshamt}, 1)", bias_quantizer=f"quantized_bits({cshamt + maxshamt})"), True)
             model = insertlayer(model, layerid+1, Activation("softmax"))
             model.load_weights(checkpoint_filepath)
             cshamt = args.cliplow

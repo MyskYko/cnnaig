@@ -72,7 +72,7 @@ def genverilogconv(image, weights, strides, name):
                 elif w1[oft] < 0:
                     f.write(f' - {sval};\n')
                 else:
-                    f.write(';\n')
+                    f.write(' + 0;\n')
     f.write('endmodule\n')
     return ((nox, noy, noft), cshamt + shamt, bitwidth)
 
